@@ -23,6 +23,9 @@
         <height>16777215</height>
        </size>
       </property>
+      <property name="contextMenuPolicy">
+       <enum>Qt::CustomContextMenu</enum>
+      </property>
       <property name="horizontalScrollBarPolicy">
        <enum>Qt::ScrollBarAsNeeded</enum>
       </property>
@@ -89,8 +92,25 @@
     </hint>
    </hints>
   </connection>
+  <connection>
+   <sender>fileTree</sender>
+   <signal>customContextMenuRequested(QPoint)</signal>
+   <receiver>MainWindow</receiver>
+   <slot>showContextMenu(QPoint)</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>256</x>
+     <y>83</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>427</x>
+     <y>85</y>
+    </hint>
+   </hints>
+  </connection>
  </connections>
  <slots>
   <slot>showPie()</slot>
+  <slot>showContextMenu(QPoint)</slot>
  </slots>
 </ui>

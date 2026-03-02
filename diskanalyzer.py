@@ -1,51 +1,17 @@
 import os
 import sys
-import math
 import platform
 import analyzer
+from utils import TreeItem, PieMaker
 
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QModelIndex, QItemSelectionModel
-from PyQt6.QtWidgets import QApplication, QMainWindow, QTreeWidgetItem, QStackedLayout
-from PyQt6.QtCharts import QChart, QChartView, QPieSeries
-from PyQt6.QtGui import QPainter, QColor, QColorConstants
+from PyQt6.QtCore import pyqtSignal, QTimer
+from PyQt6.QtWidgets import QApplication, QMainWindow, QStackedLayout, QMenu
 from PyQt6 import uic
 
 def getRoot():
     if platform.system() == "Windows":
         return os.environ.get("SystemDrive", "C:") + os.sep
     return "/"
-
-def formatBytes(value):
-    units = ["bytes", "KB", "MB", "GB", "TB", "PB"]
-    index = int(math.log(value)/math.log(1024)) if value > 0 else 0
-    value *= 1024**(-index)
-    format = f"{value:.2f}".rstrip("0").rstrip(".")
-    return f"{format} {units[index]}"
-
-class TreeItem(QTreeWidgetItem):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.setTextAlignment(1, Qt.AlignmentFlag.AlignHCenter)
-        self.name = None
-        self.size = 0
-        self.slice = None
-    
-    def setName(self, name):
-        self.name = name
-        self.setText(0, name)
-
-    def updateSize(self, deltaSize, selectedItem):
-        self.setSize(self.size+deltaSize)
-        parent = self.parent()
-        if type(parent) == TreeItem:
-            parent.updateSize(deltaSize, selectedItem)
-
-    def setSize(self, size):
-        self.size = size
-        self.setText(1, formatBytes(size))
-
-    def setSlice(self, slice):
-        self.slice = slice
 
 class AnalyzerUI(QMainWindow):
     updateSignal = pyqtSignal(tuple)
@@ -60,75 +26,63 @@ class AnalyzerUI(QMainWindow):
         pieLayout = QStackedLayout()
         pieLayout.setStackingMode(QStackedLayout.StackingMode.StackAll)
         self.pie.setLayout(pieLayout)
+        self.pieMaker = PieMaker(self.pie, self.fileTree)
 
-        self.pieSeries = self.createPie()
         self.timer = QTimer()
-        self.timer.timeout.connect(self.showPie)
-        self.timer.start(1000)
+        self.timer.timeout.connect(self.update)
+        self.timer.start(100)
         
         self.root = getRoot()
-        self.updateSignal.connect(lambda t: self.buildTree(*t))
+        self.treeQueue = []
+        self.updateSignal.connect(lambda t: self.treeQueue.append(t))
         self.emptyFolderSignal.connect(lambda item: item.setSize(0))
         self.buildTree(self.fileTree, self.root, self.root)
         self.selectTopItem()
 
-    def buildTree(self, parent, folder, name, size=None):
-        item = TreeItem(parent)
-        item.setName(name)
+    def update(self):
+        updatePie = len(self.treeQueue) > 0
+        while len(self.treeQueue) > 0:
+            t = self.treeQueue.pop(0)
+            self.buildTree(*t)
+        
+        if updatePie:
+            self.showPie()
 
-        selected = self.fileTree.selectedItems()
-        selected = selected[0] if len(selected) > 0 else None
+    def buildTree(self, parent, folder, name, size=None):
+        item = TreeItem(parent, name)
         if size:
+            selected = self.fileTree.currentItem()
             item.updateSize(size, selected)
         else:
             subpath = os.path.join(folder, name)
             self.scanner.scan(subpath, item, self.updateSignal, self.emptyFolderSignal)
 
     def selectTopItem(self):
-        model = self.fileTree.model()
-        index = model.index(0, 0, QModelIndex())
-        self.fileTree.setCurrentIndex(index)
-        self.fileTree.selectionModel().select(
-            index,
-            QItemSelectionModel.SelectionFlag.ClearAndSelect |
-            QItemSelectionModel.SelectionFlag.Rows
-        )
+        item = self.fileTree.topLevelItem(0)
+        self.fileTree.setCurrentItem(item)
 
     def showPie(self):
-        items = self.fileTree.selectedItems()
-        if len(items) > 0:
-            self.makePie(items[0])
+        item = self.fileTree.currentItem()
+        self.pieMaker.show(item)
 
-    def makePie(self, item):
-        self.pieSeries.clear()
+    def showContextMenu(self, position):
+        item = self.fileTree.itemAt(position)
+        if item is None:
+            return
 
-        for i in range(item.childCount()):
-            child = item.child(i)
-            child.setSlice(self.pieSeries.append(child.name, child.size))
-        else:
-            item.setSlice(self.pieSeries.append(item.name, 1))
+        menu = QMenu()
+        update = menu.addAction("Update")
+        delete = menu.addAction("Delete")
+        delete.setEnabled(item.isErasable())
+        action = menu.exec(self.fileTree.viewport().mapToGlobal(position))
 
-        for slice in self.pieSeries.slices():
-            if slice.angleSpan() > 3:
-                slice.setLabelColor(QColorConstants.White)
-                slice.setLabelVisible(True)
-
-    def createPie(self):
-        series = QPieSeries()
-        chart = QChart()
-        chart.addSeries(series)
-        chart.legend().setVisible(False)
-        chart.setBackgroundVisible(False)
-        chart.setPlotAreaBackgroundVisible(False)
-        chart.setBackgroundBrush(QColor(0, 0, 0, 0))
-        chart.setPlotAreaBackgroundBrush(QColor(0, 0, 0, 0))
-
-        chart_view = QChartView(chart)
-        chart_view.setRenderHint(QPainter.RenderHint.Antialiasing)
-        chart_view.setStyleSheet("background: transparent;")
-        chart_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.pie.layout().addWidget(chart_view)
-        return series
+        if action == delete:
+            path = item.getPath()
+            os.remove(path)
+            item.destroy(self.fileTree.currentItem())
+        elif action == update:
+            item.reset(self.fileTree.currentItem())
+            self.scanner.scan(item.getPath(), item, self.updateSignal, self.emptyFolderSignal)
 
 if __name__ == "__main__":
     window = QApplication(sys.argv)
